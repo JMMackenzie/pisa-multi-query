@@ -6,7 +6,7 @@
 
 using ds2i::logger;
 
-template <typename InputCollection, typename Collection>
+template <typename InputCollection, typename Collection, typename Scorer>
 void verify_collection(InputCollection const &input,
                        const char *           filename,
                        bool                   quantized,
@@ -57,9 +57,10 @@ void verify_collection(InputCollection const &input,
                     logger() << e.freq() << " != " << freq << std::endl;
                     logger() << "sequence length: " << seq.docs.size() << std::endl;
                     exit(1);
+                }
             }
+            s += 1;
         }
-        s += 1;
+        logger() << "Everything is OK!" << std::endl;
     }
-    logger() << "Everything is OK!" << std::endl;
 }
