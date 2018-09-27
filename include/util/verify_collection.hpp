@@ -56,11 +56,12 @@ void verify_collection(InputCollection const &input,
                              << std::endl;
                     logger() << e.freq() << " != " << freq << std::endl;
                     logger() << "sequence length: " << seq.docs.size() << std::endl;
+
                     exit(1);
                 }
             }
-            s += 1;
         }
-        logger() << "Everything is OK!" << std::endl;
+        s += 1;
     }
+    logger() << "Everything is OK!" << std::endl;
 }

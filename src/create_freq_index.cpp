@@ -82,7 +82,7 @@ void create_collection(InputCollection const &             input,
         for (auto &&f : plist.freqs) {
             if (quantized) {
                 float score = Scorer::doc_term_weight(f, norm_lens[*(plist.docs.begin() + i)]);
-                freqs.push_back(quantize(score));
+                freqs.push_back(quantize(score) + 1);
             } else {
                 freqs.push_back(f);
             }
