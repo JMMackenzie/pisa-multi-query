@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.0)
 project(DS2I CXX C)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 configure_file(
   ${DS2I_SOURCE_DIR}/include/ds2i_config.hpp.in
@@ -32,11 +33,6 @@ if (UNIX)
 
    # Extensive warnings
    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-missing-braces")
-   # Silence a warning bug in Boost
-   if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-local-typedefs")
-   endif ()
-   # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wconversion")
 
    if (USE_SANITIZERS)
      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
@@ -51,10 +47,9 @@ if(OPENMP_FOUND)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
 
-# set(Boost_USE_STATIC_LIBS ON)
-find_package(Boost 1.42.0 COMPONENTS filesystem system REQUIRED)
-include_directories(${Boost_INCLUDE_DIRS})
-link_directories(${Boost_LIBRARY_DIRS})
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+link_libraries(Threads::Threads)
 
 # add the root directory to include path to make includes absolute
 include_directories(${DS2I_SOURCE_DIR}/external
