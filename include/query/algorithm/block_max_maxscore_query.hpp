@@ -1,11 +1,84 @@
 #pragma once
 
+#include <gsl/span>
+
 template <typename WandType>
 struct block_max_maxscore_query {
 
     typedef bm25 scorer_type;
 
     block_max_maxscore_query(WandType const &wdata, uint64_t k) : m_wdata(&wdata), m_topk(k) {}
+
+    template <class Enum>
+    [[gnu::always_inline]] [[nodiscard]] auto score_essential(gsl::span<Enum *> essential_enums,
+                                                              uint64_t cur_doc,
+                                                              uint64_t num_docs,
+                                                              float norm_len) const
+        -> std::pair<float, uint64_t>
+    {
+        float score = 0.0;
+        uint64_t next_doc = num_docs;
+        for (auto &essential : essential_enums) {
+            auto &cursor = essential->docs_enum;
+            if (cursor.docid() == cur_doc) {
+                score +=
+                    essential->q_weight * scorer_type::doc_term_weight(cursor.freq(), norm_len);
+                cursor.next();
+            }
+            if (cursor.docid() < next_doc) {
+                next_doc = cursor.docid();
+            }
+        }
+        return std::make_pair(score, next_doc);
+    }
+
+    template <class Enum>
+    [[gnu::always_inline]] [[nodiscard]] auto current_block_upper_bound(
+        gsl::span<Enum *> non_essential_enums,
+        float block_upper_bound,
+        uint64_t cur_doc,
+        float score) -> double
+    {
+        auto enum_it = non_essential_enums.rbegin();
+        for (; enum_it != non_essential_enums.rend(); ++enum_it) {
+            auto &non_essential = *enum_it;
+            if (non_essential->w.docid() < cur_doc) {
+                non_essential->w.next_geq(cur_doc);
+            }
+            block_upper_bound -=
+                non_essential->max_weight - non_essential->w.score() * non_essential->q_weight;
+            if (not m_topk.would_enter(score + block_upper_bound)) {
+                break;
+            }
+        }
+        return block_upper_bound;
+    }
+
+    template <class Enum>
+    [[gnu::always_inline]] [[nodiscard]] auto score_non_essential(
+        gsl::span<Enum *> non_essential_enums,
+        float block_upper_bound,
+        uint64_t cur_doc,
+        float score,
+        float norm_len) -> double
+    {
+        auto enum_it = non_essential_enums.rbegin();
+        for (; enum_it != non_essential_enums.rend(); ++enum_it) {
+            auto &non_essential = *enum_it;
+            non_essential->docs_enum.next_geq(cur_doc);
+            if (non_essential->docs_enum.docid() == cur_doc) {
+                auto s = non_essential->q_weight *
+                         scorer_type::doc_term_weight(non_essential->docs_enum.freq(), norm_len);
+                block_upper_bound += s;
+            }
+            block_upper_bound -= non_essential->w.score() * non_essential->q_weight;
+
+            if (not m_topk.would_enter(score + block_upper_bound)) {
+                break;
+            }
+        }
+        return score + block_upper_bound;
+    }
 
     template <typename Index>
     uint64_t operator()(Index const &index, term_id_vec const &terms) {
@@ -43,78 +116,53 @@ struct block_max_maxscore_query {
             ordered_enums.push_back(&en);
         }
 
-        // sort enumerators by increasing maxscore
-        std::sort(
-            ordered_enums.begin(), ordered_enums.end(), [](scored_enum *lhs, scored_enum *rhs) {
-                return lhs->max_weight < rhs->max_weight;
-            });
+        auto increasing_maxscore_order = [](auto *lhs, auto *rhs) -> bool {
+            return lhs->max_weight < rhs->max_weight;
+        };
+        auto increasing_docid_order = [](auto const &lhs, auto const &rhs) -> bool {
+            return lhs.docs_enum.docid() < rhs.docs_enum.docid();
+        };
+
+        std::sort(ordered_enums.begin(), ordered_enums.end(), increasing_maxscore_order);
 
         std::vector<float> upper_bounds(ordered_enums.size());
-        upper_bounds[0] = ordered_enums[0]->max_weight;
-        for (size_t i = 1; i < ordered_enums.size(); ++i) {
-            upper_bounds[i] = upper_bounds[i - 1] + ordered_enums[i]->max_weight;
-        }
+        std::transform(ordered_enums.begin(),
+                       ordered_enums.end(),
+                       upper_bounds.begin(),
+                       [](auto const &elem) { return elem->max_weight; });
+        std::partial_sum(upper_bounds.begin(), upper_bounds.end(), upper_bounds.begin());
 
-        int      non_essential_lists = 0;
+        int non_essential_lists = 0;
         uint64_t cur_doc =
-            std::min_element(enums.begin(),
-                             enums.end(),
-                             [](scored_enum const &lhs, scored_enum const &rhs) {
-                                 return lhs.docs_enum.docid() < rhs.docs_enum.docid();
-                             })
-                ->docs_enum.docid();
+            std::min_element(enums.begin(), enums.end(), increasing_docid_order)->docs_enum.docid();
 
         while (non_essential_lists < ordered_enums.size() && cur_doc < index.num_docs()) {
-            float    score    = 0;
-            float    norm_len = m_wdata->norm_len(cur_doc);
-            uint64_t next_doc = index.num_docs();
-            for (size_t i = non_essential_lists; i < ordered_enums.size(); ++i) {
-                if (ordered_enums[i]->docs_enum.docid() == cur_doc) {
-                    score +=
-                        ordered_enums[i]->q_weight *
-                        scorer_type::doc_term_weight(ordered_enums[i]->docs_enum.freq(), norm_len);
-                    ordered_enums[i]->docs_enum.next();
-                }
-                if (ordered_enums[i]->docs_enum.docid() < next_doc) {
-                    next_doc = ordered_enums[i]->docs_enum.docid();
-                }
-            }
+            float norm_len = m_wdata->norm_len(cur_doc);
 
-            double block_upper_bound =
-                non_essential_lists > 0 ? upper_bounds[non_essential_lists - 1] : 0;
-            for (int i = non_essential_lists - 1; i + 1 > 0; --i) {
-                if (ordered_enums[i]->w.docid() < cur_doc) {
-                    ordered_enums[i]->w.next_geq(cur_doc);
-                }
-                block_upper_bound -= ordered_enums[i]->max_weight -
-                                     ordered_enums[i]->w.score() * ordered_enums[i]->q_weight;
-                if (!m_topk.would_enter(score + block_upper_bound)) {
-                    break;
-                }
-            }
+            auto [score, next_doc] = score_essential(
+                gsl::span<scored_enum *>(ordered_enums).subspan(non_essential_lists),
+                cur_doc,
+                index.num_docs(),
+                norm_len);
+
+            auto block_upper_bound = current_block_upper_bound(
+                gsl::span<scored_enum *>(ordered_enums).first(non_essential_lists),
+                non_essential_lists > 0 ? upper_bounds[non_essential_lists - 1] : 0,
+                cur_doc,
+                score);
+
             if (m_topk.would_enter(score + block_upper_bound)) {
-                // try to complete evaluation with non-essential lists
-                for (size_t i = non_essential_lists - 1; i + 1 > 0; --i) {
-                    ordered_enums[i]->docs_enum.next_geq(cur_doc);
-                    if (ordered_enums[i]->docs_enum.docid() == cur_doc) {
-                        auto s = ordered_enums[i]->q_weight *
-                                 scorer_type::doc_term_weight(ordered_enums[i]->docs_enum.freq(),
-                                                              norm_len);
-                        // score += s;
-                        block_upper_bound += s;
-                    }
-                    block_upper_bound -= ordered_enums[i]->w.score() * ordered_enums[i]->q_weight;
-
-                    if (!m_topk.would_enter(score + block_upper_bound)) {
-                        break;
-                    }
-                }
-                score += block_upper_bound;
+                score = score_non_essential(
+                    gsl::span<scored_enum *>(ordered_enums).first(non_essential_lists),
+                    block_upper_bound,
+                    cur_doc,
+                    score,
+                    norm_len);
             }
+
             if (m_topk.insert(score)) {
-                // update non-essential lists
                 while (non_essential_lists < ordered_enums.size() &&
-                       !m_topk.would_enter(upper_bounds[non_essential_lists])) {
+                       not m_topk.would_enter(upper_bounds[non_essential_lists])) {
                     non_essential_lists += 1;
                 }
             }
