@@ -26,8 +26,8 @@ target_link_libraries(queries
   CLI11
 )
 
-add_executable(multi_queries multi_queries.cpp)
-target_link_libraries(multi_queries
+add_executable(single_pass_combsum single_pass_combsum.cpp)
+target_link_libraries(single_pass_combsum
   pisa
   CLI11
 )
@@ -39,8 +39,8 @@ target_link_libraries(evaluate_queries
   CLI11
 )
 
-add_executable(evaluate_multi_queries evaluate_multi_queries.cpp)
-target_link_libraries(evaluate_multi_queries
+add_executable(evaluate_single_pass_combsum evaluate_single_pass_combsum.cpp)
+target_link_libraries(evaluate_single_pass_combsum
   pisa
   CLI11
 )

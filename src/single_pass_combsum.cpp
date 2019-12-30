@@ -283,7 +283,7 @@ int main(int argc, const char **argv)
         if (compressed) {                                                              \
             perftest<BOOST_PP_CAT(T, _index), wand_uniform_index>(index_filename,      \
                                                                   wand_data_filename,  \
-                                                                  spcs_queries,             \
+                                                                  spcs_queries,        \
                                                                   thresholds_filename, \
                                                                   type,                \
                                                                   query_type,          \
@@ -293,7 +293,7 @@ int main(int argc, const char **argv)
         } else {                                                                       \
             perftest<BOOST_PP_CAT(T, _index), wand_raw_index>(index_filename,          \
                                                               wand_data_filename,      \
-                                                              spcs_queries,                 \
+                                                              spcs_queries,            \
                                                               thresholds_filename,     \
                                                               type,                    \
                                                               query_type,              \
