@@ -26,11 +26,25 @@ target_link_libraries(queries
   CLI11
 )
 
+add_executable(multi_queries multi_queries.cpp)
+target_link_libraries(multi_queries
+  pisa
+  CLI11
+)
+
+
 add_executable(evaluate_queries evaluate_queries.cpp)
 target_link_libraries(evaluate_queries
   pisa
   CLI11
 )
+
+add_executable(evaluate_multi_queries evaluate_multi_queries.cpp)
+target_link_libraries(evaluate_multi_queries
+  pisa
+  CLI11
+)
+
 
 add_executable(thresholds thresholds.cpp)
 target_link_libraries(thresholds

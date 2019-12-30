@@ -142,6 +142,61 @@ term_freq_vec query_freqs(term_id_vec terms)
     return query_term_freqs;
 }
 
+using multi_query = std::vector<Query>;
+// Consume a vector of queries, and convert to multi-queries
+std::vector<multi_query> generate_multi_queries (std::vector<Query> queries)
+{
+    std::vector<multi_query> multi_queries;
+
+    std::map<std::string, multi_query> mapped_queries;
+    for (auto &q : queries) {
+        std::string id = q.id.value_or("");
+        if (id == "") {
+            spdlog::error("Error: Multi Queries must have IDs");
+            exit(1);
+        }
+        remove_duplicate_terms(q.terms); // Ensure queries are unique terms only
+        mapped_queries[id].push_back(q);
+    }
+
+    for (const auto &elem : mapped_queries)
+        multi_queries.push_back(elem.second);
+  
+    spdlog::info("Read {} multi queries.", multi_queries.size());
+    return multi_queries;
+
+}
+
+// Convert a multi-query into the SP-CS format
+std::vector<Query> multi_query_to_spcs (std::vector<multi_query> queries) 
+{
+    std::vector<Query> spcs_queries;
+    
+    std::map<std::string, Query> q_map;
+    size_t count = 0;
+    for (const auto & multi : queries) {
+        for (const auto & query : multi) {
+            ++count;
+            std::string id = query.id.value_or("");
+            if (id == "") {
+                spdlog::error("Error: Multi Queries must have IDs");
+                exit(1);
+            }
+            q_map[id].id = id;
+            for (const auto & term : query.terms) {
+                q_map[id].terms.push_back(term);
+            }
+        }
+    }
+    
+    for (const auto &elem : q_map) {
+      spcs_queries.push_back(elem.second);
+    }
+
+    spdlog::info("Converted {} queries into {} SP-CS queries.", count, spcs_queries.size());
+    return spcs_queries;
+}
+
 } // namespace pisa
 
 #include "algorithm/and_query.hpp"
