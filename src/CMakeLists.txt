@@ -32,6 +32,12 @@ target_link_libraries(single_pass_combsum
   CLI11
 )
 
+add_executable(parallel_combsum parallel_combsum.cpp)
+target_link_libraries(parallel_combsum
+  pisa
+  CLI11
+)
+
 
 add_executable(evaluate_queries evaluate_queries.cpp)
 target_link_libraries(evaluate_queries
