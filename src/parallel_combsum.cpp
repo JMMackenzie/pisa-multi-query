@@ -36,8 +36,8 @@ void join_thread(std::thread& t) {
     t.join();
 }
 
-template <typename Fn>
-void extract_times(Fn fn,
+template <typename Functor>
+void extract_times(Functor query_func,
                    std::vector<multi_query> const &queries,
                    std::string const &index_type,
                    std::string const &query_type,
@@ -46,16 +46,47 @@ void extract_times(Fn fn,
                    std::ostream &os)
 {
     std::vector<std::size_t> times(runs);
-    for (auto &&[qid, query] : enumerate(queries)) {
-        do_not_optimize_away(fn(query));
-        std::generate(times.begin(), times.end(), [&fn, &q = query]() {
-            return run_with_timer<std::chrono::microseconds>([&]() { do_not_optimize_away(fn(q)); })
-                .count();
-        });
+    
+    for (auto const & m_query : queries) {
+        for (size_t i = 0; i < runs; ++i) {
+               
+            topk_queue fused_top_k(fusion_k);
+            std::unordered_map<uint64_t, float> fusion_accumulators;
+            std::vector<std::thread> query_threads;
+            std::vector<std::vector<std::pair<float, uint64_t>>> raw_results(m_query.size());
+ 
+            double tick = get_time_usecs();
+            size_t idx = 0;
+            for (auto const & query : m_query) {
+                
+                auto q_thread = std::thread( [&, idx] {            
+                    raw_results[idx] = query_func(query);
+                });
+
+                query_threads.emplace_back(std::move(q_thread));
+                ++idx;
+            }
+            
+            std::for_each(query_threads.begin(), query_threads.end(), join_thread);
+
+            // CombSUM fusion
+            for (auto const & result : raw_results) {
+                for (auto const & scored_pair : result) {
+                    fusion_accumulators[scored_pair.second] += scored_pair.first; 
+                }
+            } 
+            // Now create fused top-k
+            for (auto it = fusion_accumulators.begin(); it != fusion_accumulators.end(); ++it) {
+                fused_top_k.insert(it->second, it->first);
+            }
+            double tock = get_time_usecs();
+            double usecs = tock-tick;
+            times[i] = usecs;
+        }
         auto mean =
             std::accumulate(times.begin(), times.end(), std::size_t{0}, std::plus<>()) / runs;
-        os << fmt::format("{}\t{}\n", query.id.value_or(std::to_string(qid)), mean);
-    }
+        os << fmt::format("{}\t{}\n", m_query[0].id.value_or("0"), mean);
+   }
 }
 
 template <typename Functor>
@@ -70,35 +101,39 @@ void op_perftest(Functor query_func,
     std::vector<double> query_times;
     topk_queue fused_top_k(fusion_k);
     std::unordered_map<uint64_t, float> fusion_accumulators;
-    std::mutex fuse_lock; 
-
-    // JMM - Push top-k heaps back into a vector instead?
 
     for (size_t run = 0; run <= runs; ++run) {
         for (auto const & m_query : queries) {
                    
             std::vector<std::thread> query_threads;
+            std::vector<std::vector<std::pair<float, uint64_t>>> raw_results(m_query.size());
+ 
             double tick = get_time_usecs();
+            size_t idx = 0;
             for (auto const & query : m_query) {
-
-                auto q_thread = std::thread( [&] {            
-                    auto result = query_func(query);
-                    fuse_lock.lock();
-                    // CombSUM fusion
-                    for (auto const & scored_pair : result) {
-                       fusion_accumulators[scored_pair.second] += scored_pair.first; 
-                    }
-                    fuse_lock.unlock();          
+                
+                auto q_thread = std::thread( [&, idx] {            
+                    raw_results[idx] = query_func(query);
                 });
+
                 query_threads.emplace_back(std::move(q_thread));
+                ++idx;
             }
-//XXX
+            
             std::for_each(query_threads.begin(), query_threads.end(), join_thread);
 
+            // CombSUM fusion
+            for (auto const & result : raw_results) {
+                for (auto const & scored_pair : result) {
+                    fusion_accumulators[scored_pair.second] += scored_pair.first; 
+                }
+            } 
             // Now create fused top-k
             for (auto it = fusion_accumulators.begin(); it != fusion_accumulators.end(); ++it) {
                 fused_top_k.insert(it->second, it->first);
             }
+            fused_top_k.finalize();
+ 
             double tock = get_time_usecs();
             double usecs = tock-tick;            
   
@@ -198,8 +233,8 @@ void perftest(const std::string &index_filename,
             query_fun = [&](Query query) {
                 topk_queue topk(k);
                 wand_query wand_q(topk);
-                wand_q.multi_query(make_max_scored_cursors(index, wdata, *scorer, query),
-                                   index.num_docs());
+                wand_q(make_max_scored_cursors(index, wdata, *scorer, query),
+                       index.num_docs());
                 topk.finalize();
                 return topk.topk();
             };
@@ -207,8 +242,8 @@ void perftest(const std::string &index_filename,
             query_fun = [&](Query query) {
                 topk_queue topk(k);
                 block_max_wand_query block_max_wand_q(topk);
-                block_max_wand_q.multi_query(make_block_max_scored_cursors(index, wdata, *scorer, query),
-                                            index.num_docs());
+                block_max_wand_q(make_block_max_scored_cursors(index, wdata, *scorer, query),
+                                 index.num_docs());
                 topk.finalize();
                 return topk.topk();
             };
@@ -216,7 +251,7 @@ void perftest(const std::string &index_filename,
             query_fun = [&](Query query) {
                 topk_queue topk(k);
                 block_max_maxscore_query block_max_maxscore_q(topk);
-                block_max_maxscore_q.multi_query(
+                block_max_maxscore_q(
                     make_block_max_scored_cursors(index, wdata, *scorer, query), index.num_docs());
                 topk.finalize();
                 return topk.topk();
@@ -225,7 +260,7 @@ void perftest(const std::string &index_filename,
             query_fun = [&](Query query) {
                 topk_queue topk(k);
                 ranked_or_query ranked_or_q(topk);
-                ranked_or_q.multi_query(make_scored_cursors(index, *scorer, query), index.num_docs());
+                ranked_or_q(make_scored_cursors(index, *scorer, query), index.num_docs());
                 topk.finalize();
                 return topk.topk();
             };
@@ -233,8 +268,8 @@ void perftest(const std::string &index_filename,
             query_fun = [&](Query query) {
                 topk_queue topk(k);
                 maxscore_query maxscore_q(topk);
-                maxscore_q.multi_query(make_max_scored_cursors(index, wdata, *scorer, query),
-                                  index.num_docs());
+                maxscore_q(make_max_scored_cursors(index, wdata, *scorer, query),
+                           index.num_docs());
                 topk.finalize();
                 return topk.topk();
             };
@@ -244,7 +279,7 @@ void perftest(const std::string &index_filename,
         }
         
         if (extract) {
-            //extract_times(query_fun, queries, type, t, fusion_k, 2, std::cout);
+            extract_times(query_fun, queries, type, t, fusion_k, 2, std::cout);
         } else {
             op_perftest(query_fun, queries, type, t, fusion_k, 2);
         }

@@ -51,6 +51,12 @@ target_link_libraries(evaluate_single_pass_combsum
   CLI11
 )
 
+add_executable(evaluate_parallel_combsum evaluate_parallel_combsum.cpp)
+target_link_libraries(evaluate_parallel_combsum
+  pisa
+  CLI11
+)
+
 
 add_executable(thresholds thresholds.cpp)
 target_link_libraries(thresholds
